@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- Console appender for stderr only - MCP needs stdout for protocol -->
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} -- %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Set logging level and appender -->
+    <root level="INFO">
+        <appender-ref ref="STDERR" />
+    </root>
+    
+    <!-- Reduce ktor client noise -->
+    <logger name="io.ktor.client" level="WARN" />
+</configuration>

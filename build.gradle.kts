@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm") version "1.9.21"
-    kotlin("plugin.serialization") version "1.9.21"
+    kotlin("jvm") version "2.2.0"
+    kotlin("plugin.serialization") version "2.2.0"
     application
     id("com.github.johnrengelman.shadow") version "8.1.1"
 }
@@ -11,14 +11,14 @@ version = "1.0.0"
 
 dependencies {
     // MCP Kotlin SDK
-    implementation("io.modelcontextprotocol:kotlin-sdk:0.1.0")
+    implementation("io.modelcontextprotocol:kotlin-sdk:0.6.0")
     
     // Ktor for HTTP clients
-    implementation("io.ktor:ktor-client-core:2.3.7")
-    implementation("io.ktor:ktor-client-cio:2.3.7")
-    implementation("io.ktor:ktor-client-content-negotiation:2.3.7")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.7")
-    implementation("io.ktor:ktor-client-logging:2.3.7")
+    implementation("io.ktor:ktor-client-core:3.1.1")
+    implementation("io.ktor:ktor-client-cio:3.1.1")
+    implementation("io.ktor:ktor-client-content-negotiation:3.1.1")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:3.1.1")
+    implementation("io.ktor:ktor-client-logging:3.1.1")
     
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
@@ -29,6 +29,9 @@ dependencies {
     // Logging
     implementation("ch.qos.logback:logback-classic:1.4.14")
     implementation("io.github.microutils:kotlin-logging-jvm:3.0.5")
+    
+    // Kotlinx IO for MCP transport
+    implementation("org.jetbrains.kotlinx:kotlinx-io-core:0.7.0")
     
     // Date/Time
     implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.5.0")

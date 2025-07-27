@@ -1,24 +1,25 @@
 package com.mcpbeet.model
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 import kotlinx.datetime.Instant
 
 @Serializable
 data class OddsData(
     val id: String,
-    val sportKey: String,
-    val sportTitle: String,
-    val homeTeam: String,
-    val awayTeam: String,
-    val commenceTime: Instant,
-    val bookmakers: List<Bookmaker>
+    @SerialName("sport_key") val sportKey: String,
+    @SerialName("sport_title") val sportTitle: String,
+    @SerialName("home_team") val homeTeam: String,
+    @SerialName("away_team") val awayTeam: String,
+    @SerialName("commence_time") val commenceTime: Instant,
+    val bookmakers: List<Bookmaker> = emptyList()
 )
 
 @Serializable
 data class Bookmaker(
     val key: String,
     val title: String,
-    val lastUpdate: Instant,
+    @SerialName("last_update") val lastUpdate: Instant? = null,
     val markets: List<Market>
 )
 
@@ -78,4 +79,39 @@ data class ValueAnalysis(
     val kelly: Double, // Kelly criterion
     val confidence: Double,
     val recommendation: String
+)
+
+@Serializable
+data class ScoreData(
+    val id: String,
+    val sport_key: String,
+    val sport_title: String,
+    val commence_time: Instant,
+    val completed: Boolean,
+    val home_team: String,
+    val away_team: String,
+    val scores: List<Score>? = null,
+    val last_update: Instant? = null
+)
+
+@Serializable
+data class Score(
+    val name: String,
+    val score: String
+)
+
+@Serializable
+data class EventData(
+    val id: String,
+    val sport_key: String,
+    val sport_title: String,
+    val commence_time: Instant,
+    val home_team: String,
+    val away_team: String
+)
+
+@Serializable
+data class Participant(
+    val key: String,
+    val name: String
 )

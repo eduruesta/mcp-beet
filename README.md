@@ -46,14 +46,19 @@ export ODDS_API_KEY=your_api_key_here
 This server can be integrated with Claude Code or other MCP clients. Add to your MCP configuration:
 
 ```json
-{
-  "mcpServers": {
-    "mcp-beet": {
-      "command": "java",
-      "args": ["-jar", "path/to/mcp-beet-server.jar"]
-    }
-  }
+  {
+   "mcpServers": {
+      "mcp-beet": {
+         "command": "java",
+         "args": ["-jar", "/Users/eduardoruesta/Workplace/mcp-beet/build/libs/mcp-beet-server-1.0.0.jar"],
+            "env": {
+               "ODDS_API_KEY":
+               "5c88d13c45c678faa196d0cf16117ac2"
+            }
+            }
+         }
 }
+
 ```
 
 ## Development

@@ -104,8 +104,8 @@ class AnalysisService {
         val stakes = mutableMapOf<String, Double>()
         
         for ((outcome, bookmakerOdds) in outcomeOdds) {
-            val stake = (totalStake / bookmakersOdds.second) / totalImpliedProb
-            stakes[bookmakersOdds.first] = stake
+            val stake = (totalStake / bookmakerOdds.second) / totalImpliedProb
+            stakes[bookmakerOdds.first] = stake
         }
         
         val profit = totalStake * (1.0 - totalImpliedProb)

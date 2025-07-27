@@ -1,17 +1,5 @@
 package com.mcpbeet
 
-import com.mcpbeet.mcp.BettingMCPServer
-import mu.KotlinLogging
+import com.mcpbeet.mcp.`run betting mcp server`
 
-private val logger = KotlinLogging.logger {}
-
-suspend fun main() {
-    logger.info { "Starting MCP Beet Server..." }
-    
-    try {
-        val server = BettingMCPServer()
-        server.start()
-    } catch (e: Exception) {
-        logger.error(e) { "Failed to start MCP Beet Server" }
-    }
-}
+fun main() = `run betting mcp server`()

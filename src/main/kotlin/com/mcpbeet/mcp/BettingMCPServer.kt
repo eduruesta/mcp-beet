@@ -2,237 +2,444 @@ package com.mcpbeet.mcp
 
 import com.mcpbeet.api.OddsApiClient
 import com.mcpbeet.service.AnalysisService
+import com.mcpbeet.model.BettingEvent
+import io.ktor.utils.io.streams.asInput
+import io.modelcontextprotocol.kotlin.sdk.*
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
-import io.modelcontextprotocol.kotlin.sdk.server.capabilities.ServerCapabilities
-import io.modelcontextprotocol.kotlin.sdk.server.transport.StdioServerTransport
-import io.modelcontextprotocol.kotlin.sdk.shared.Implementation
+import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import kotlinx.io.asSink
+import kotlinx.io.buffered
+import kotlinx.serialization.json.*
 import mu.KotlinLogging
 
 private val logger = KotlinLogging.logger {}
 
-class BettingMCPServer {
-    private val oddsApiClient = OddsApiClient()
-    private val analysisService = AnalysisService()
+fun `run betting mcp server`() {
+    val oddsApiClient = OddsApiClient()
+    val analysisService = AnalysisService()
     
-    private val server = Server(
-        serverInfo = Implementation(
+    val server = Server(
+        Implementation(
             name = "mcp-beet",
             version = "1.0.0"
         ),
-        options = ServerOptions(
+        ServerOptions(
             capabilities = ServerCapabilities(
-                resources = ServerCapabilities.Resources(
-                    subscribe = true,
-                    listChanged = true
-                ),
-                tools = ServerCapabilities.Tools(
-                    listChanged = true
-                ),
-                prompts = ServerCapabilities.Prompts(
-                    listChanged = true
-                )
+                tools = ServerCapabilities.Tools(listChanged = true)
             )
         )
     )
     
-    init {
-        setupResources()
-        setupTools()
-        setupPrompts()
-    }
-    
-    private fun setupResources() {
-        // Current odds resource
-        server.addResource(
-            uri = "odds://current/{sport}",
-            name = "Current Odds",
-            description = "Get current odds for a specific sport",
-            mimeType = "application/json"
-        ) { request ->
-            runBlocking {
-                try {
-                    val sport = extractSportFromUri(request.uri)
-                    val odds = oddsApiClient.getOdds(sport)
-                    io.modelcontextprotocol.kotlin.sdk.shared.ReadResourceResult(
-                        contents = listOf(
-                            io.modelcontextprotocol.kotlin.sdk.shared.TextResourceContents(
-                                text = kotlinx.serialization.json.Json.encodeToString(
-                                    kotlinx.serialization.serializer(),
-                                    odds
-                                ),
-                                uri = request.uri,
-                                mimeType = "application/json"
-                            )
-                        )
-                    )
-                } catch (e: Exception) {
-                    logger.error(e) { "Failed to fetch odds for ${request.uri}" }
-                    io.modelcontextprotocol.kotlin.sdk.shared.ReadResourceResult(
-                        contents = listOf(
-                            io.modelcontextprotocol.kotlin.sdk.shared.TextResourceContents(
-                                text = "{\"error\": \"${e.message}\"}",
-                                uri = request.uri,
-                                mimeType = "application/json"
-                            )
-                        )
-                    )
-                }
-            }
-        }
-        
-        // Sports list resource
-        server.addResource(
-            uri = "odds://sports",
-            name = "Available Sports",
-            description = "List all available sports for betting odds",
-            mimeType = "application/json"
-        ) { request ->
-            runBlocking {
-                try {
-                    val sports = oddsApiClient.getSports()
-                    io.modelcontextprotocol.kotlin.sdk.shared.ReadResourceResult(
-                        contents = listOf(
-                            io.modelcontextprotocol.kotlin.sdk.shared.TextResourceContents(
-                                text = kotlinx.serialization.json.Json.encodeToString(
-                                    kotlinx.serialization.serializer(),
-                                    sports
-                                ),
-                                uri = request.uri,
-                                mimeType = "application/json"
-                            )
-                        )
-                    )
-                } catch (e: Exception) {
-                    logger.error(e) { "Failed to fetch sports list" }
-                    io.modelcontextprotocol.kotlin.sdk.shared.ReadResourceResult(
-                        contents = listOf(
-                            io.modelcontextprotocol.kotlin.sdk.shared.TextResourceContents(
-                                text = "{\"error\": \"${e.message}\"}",
-                                uri = request.uri,
-                                mimeType = "application/json"
-                            )
-                        )
-                    )
-                }
-            }
-        }
-    }
-    
-    private fun setupTools() {
-        // Compare odds tool
-        server.addTool(
-            name = "compare-odds",
-            description = "Compare odds across multiple bookmakers for a specific event"
-        ) { request ->
-            runBlocking {
-                try {
-                    val sport = request.arguments?.get("sport")?.toString() ?: "americanfootball_nfl"
-                    val odds = oddsApiClient.getOdds(sport)
-                    
-                    val result = buildString {
-                        appendLine("Odds comparison for $sport:")
-                        for (event in odds.take(5)) { // Limit to 5 events
-                            appendLine("\n${event.homeTeam} vs ${event.awayTeam}")
-                            for (bookmaker in event.bookmakers) {
-                                appendLine("  ${bookmaker.title}:")
-                                for (market in bookmaker.markets) {
-                                    if (market.key == "h2h") {
-                                        appendLine("    ${market.outcomes.joinToString(", ") { "${it.name}: ${it.price}" }}")
-                                    }
-                                }
-                            }
-                        }
+    // Add betting analysis tools
+    server.addTool(
+        name = "compare-odds",
+        description = "Compare odds across multiple sportsbooks for a specific sport and event",
+        inputSchema = Tool.Input(
+            buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("sport") {
+                        put("type", "string")
+                        put("description", "Sport key (e.g., basketball_nba, soccer_epl)")
                     }
-                    
-                    io.modelcontextprotocol.kotlin.sdk.shared.CallToolResult(
-                        content = listOf(
-                            io.modelcontextprotocol.kotlin.sdk.shared.TextContent(
-                                type = "text",
-                                text = result
-                            )
-                        )
-                    )
-                } catch (e: Exception) {
-                    logger.error(e) { "Failed to compare odds" }
-                    io.modelcontextprotocol.kotlin.sdk.shared.CallToolResult(
-                        content = listOf(
-                            io.modelcontextprotocol.kotlin.sdk.shared.TextContent(
-                                type = "text",
-                                text = "Error comparing odds: ${e.message}"
-                            )
-                        )
-                    )
+                    putJsonObject("event_id") {
+                        put("type", "string")
+                        put("description", "Event ID to analyze")
+                    }
+                }
+                putJsonArray("required") {
+                    add("sport")
+                    add("event_id")
                 }
             }
-        }
-    }
-    
-    private fun setupPrompts() {
-        server.addPrompt(
-            name = "betting-strategy",
-            description = "Generate betting strategy recommendations based on current odds and analysis"
-        ) { request ->
-            runBlocking {
-                val sport = request.arguments?.get("sport")?.toString() ?: "americanfootball_nfl"
-                val bankroll = request.arguments?.get("bankroll")?.toString()?.toDoubleOrNull() ?: 1000.0
-                
-                val strategy = generateBettingStrategy(sport, bankroll)
-                
-                io.modelcontextprotocol.kotlin.sdk.shared.GetPromptResult(
-                    description = "Betting strategy for $sport with $${bankroll} bankroll",
-                    messages = listOf(
-                        io.modelcontextprotocol.kotlin.sdk.shared.PromptMessage(
-                            role = io.modelcontextprotocol.kotlin.sdk.shared.Role.USER,
-                            content = io.modelcontextprotocol.kotlin.sdk.shared.TextContent(
-                                type = "text",
-                                text = strategy
-                            )
-                        )
+        )
+    ) { request ->
+        val sport = request.arguments["sport"]?.jsonPrimitive?.content ?: ""
+        val eventId = request.arguments["event_id"]?.jsonPrimitive?.content ?: ""
+        
+        try {
+            val oddsData = oddsApiClient.getOdds(sport)
+            val odds = oddsData.find { it.id == eventId }
+            
+            if (odds != null) {
+                // Convert OddsData to BettingEvent
+                val event = BettingEvent(
+                    id = odds.id,
+                    sport = odds.sportKey,
+                    league = odds.sportTitle,
+                    homeTeam = odds.homeTeam,
+                    awayTeam = odds.awayTeam,
+                    startTime = odds.commenceTime,
+                    odds = mapOf(odds.id to odds)
+                )
+                val analysis = analysisService.analyzeEvent(event)
+                CallToolResult(
+                    content = listOf(
+                        TextContent("Odds comparison analysis for $eventId:\n${analysis.joinToString("\n") { 
+                            "Market: ${it.market}, Best: ${it.bestOdds.outcome} @ ${it.bestOdds.odds} (${it.bestOdds.bookmaker}), Recommendation: ${it.valueAnalysis.recommendation}"
+                        }}")
                     )
                 )
+            } else {
+                CallToolResult(
+                    content = listOf(TextContent("Event not found: $eventId"))
+                )
             }
+        } catch (e: Exception) {
+            CallToolResult(
+                content = listOf(TextContent("Error comparing odds: ${e.message}"))
+            )
         }
     }
     
-    private suspend fun generateBettingStrategy(sport: String, bankroll: Double): String {
-        return try {
-            val odds = oddsApiClient.getOdds(sport)
-            buildString {
-                appendLine("🎯 BETTING STRATEGY RECOMMENDATION")
-                appendLine("Sport: $sport")
-                appendLine("Bankroll: $${bankroll}")
-                appendLine("Risk Management: Use 1-5% of bankroll per bet")
-                appendLine("\nTop Opportunities:")
-                
-                // Simple analysis for demonstration
-                odds.take(3).forEach { event ->
-                    appendLine("\n📊 ${event.homeTeam} vs ${event.awayTeam}")
-                    val bestBookmaker = event.bookmakers.maxByOrNull { it.markets.firstOrNull()?.outcomes?.maxOfOrNull { outcome -> outcome.price } ?: 0.0 }
-                    if (bestBookmaker != null) {
-                        appendLine("  Best odds at: ${bestBookmaker.title}")
-                        appendLine("  Recommended stake: $${(bankroll * 0.02).toInt()}")
+    server.addTool(
+        name = "find-arbitrage",
+        description = "Find arbitrage betting opportunities across sportsbooks",
+        inputSchema = Tool.Input(
+            buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("sport") {
+                        put("type", "string")
+                        put("description", "Sport key to search for arbitrage opportunities")
+                    }
+                }
+                putJsonArray("required") {
+                    add("sport")
+                }
+            }
+        )
+    ) { request ->
+        val sport = request.arguments["sport"]?.jsonPrimitive?.content ?: ""
+        
+        try {
+            val oddsData = oddsApiClient.getOdds(sport)
+            val arbitrageOpportunities = mutableListOf<String>()
+            
+            for (odds in oddsData) {
+                // Convert OddsData to BettingEvent
+                val event = BettingEvent(
+                    id = odds.id,
+                    sport = odds.sportKey,
+                    league = odds.sportTitle,
+                    homeTeam = odds.homeTeam,
+                    awayTeam = odds.awayTeam,
+                    startTime = odds.commenceTime,
+                    odds = mapOf(odds.id to odds)
+                )
+                val analyses = analysisService.analyzeEvent(event)
+                for (analysis in analyses) {
+                    analysis.arbitrageOpportunity?.let { arb ->
+                        if (arb.guaranteed && arb.profit > 0) {
+                            arbitrageOpportunities.add(
+                                "Event: ${event.homeTeam} vs ${event.awayTeam}, Market: ${analysis.market}, Profit: $${String.format("%.2f", arb.profit)}"
+                            )
+                        }
                     }
                 }
             }
+            
+            CallToolResult(
+                content = listOf(
+                    TextContent(
+                        if (arbitrageOpportunities.isNotEmpty()) {
+                            "Found ${arbitrageOpportunities.size} arbitrage opportunities:\n${arbitrageOpportunities.joinToString("\n")}"
+                        } else {
+                            "No arbitrage opportunities found for $sport"
+                        }
+                    )
+                )
+            )
         } catch (e: Exception) {
-            "Error generating strategy: ${e.message}"
+            CallToolResult(
+                content = listOf(TextContent("Error finding arbitrage: ${e.message}"))
+            )
         }
     }
     
-    private fun extractSportFromUri(uri: String): String {
-        // Extract sport from URI like "odds://current/soccer_epl"
-        return uri.substringAfterLast("/")
+    // Get available sports
+    server.addTool(
+        name = "get-sports",
+        description = "Get list of available sports for betting analysis",
+        inputSchema = Tool.Input(
+            buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {}
+            }
+        )
+    ) { request ->
+        try {
+            val sports = oddsApiClient.getSports()
+            CallToolResult(
+                content = listOf(
+                    TextContent("Available sports:\n${sports.joinToString("\n") { 
+                        "• ${it.title} (${it.key}) - ${if (it.active) "Active" else "Inactive"}"
+                    }}")
+                )
+            )
+        } catch (e: Exception) {
+            CallToolResult(
+                content = listOf(TextContent("Error fetching sports: ${e.message}"))
+            )
+        }
     }
     
-    suspend fun start() {
-        logger.info { "Starting MCP Beet Server..." }
-        val transport = StdioServerTransport()
-        server.connect(transport)
+    // Get upcoming events for a sport
+    server.addTool(
+        name = "get-events",
+        description = "Get upcoming events for a specific sport",
+        inputSchema = Tool.Input(
+            buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("sport") {
+                        put("type", "string")
+                        put("description", "Sport key (e.g., basketball_nba, soccer_epl)")
+                    }
+                }
+                putJsonArray("required") {
+                    add("sport")
+                }
+            }
+        )
+    ) { request ->
+        val sport = request.arguments["sport"]?.jsonPrimitive?.content ?: ""
+        
+        try {
+            val events = oddsApiClient.getEvents(sport)
+            CallToolResult(
+                content = listOf(
+                    TextContent("Upcoming events in $sport:\n${events.take(10).joinToString("\n") { 
+                        "• ${it.home_team} vs ${it.away_team} - ${it.commence_time} (ID: ${it.id})"
+                    }}")
+                )
+            )
+        } catch (e: Exception) {
+            CallToolResult(
+                content = listOf(TextContent("Error fetching events: ${e.message}"))
+            )
+        }
     }
     
-    fun close() {
-        oddsApiClient.close()
+    // Get recent scores
+    server.addTool(
+        name = "get-scores",
+        description = "Get recent scores and results for a sport",
+        inputSchema = Tool.Input(
+            buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("sport") {
+                        put("type", "string")
+                        put("description", "Sport key to get scores for")
+                    }
+                    putJsonObject("days_from") {
+                        put("type", "integer")
+                        put("description", "Number of days back to get scores (default: 3)")
+                        put("default", 3)
+                    }
+                }
+                putJsonArray("required") {
+                    add("sport")
+                }
+            }
+        )
+    ) { request ->
+        val sport = request.arguments["sport"]?.jsonPrimitive?.content ?: ""
+        val daysFrom = request.arguments["days_from"]?.jsonPrimitive?.intOrNull ?: 3
+        
+        try {
+            val scores = oddsApiClient.getScores(sport, daysFrom)
+            CallToolResult(
+                content = listOf(
+                    TextContent("Recent scores in $sport:\n${scores.take(15).joinToString("\n") { 
+                        val scoreText = it.scores?.joinToString(" - ") { score -> "${score.name}: ${score.score}" } ?: "No score"
+                        "• ${it.home_team} vs ${it.away_team}: $scoreText ${if (it.completed) "(Final)" else "(Live)"}"
+                    }}")
+                )
+            )
+        } catch (e: Exception) {
+            CallToolResult(
+                content = listOf(TextContent("Error fetching scores: ${e.message}"))
+            )
+        }
+    }
+    
+    // Best betting recommendations
+    server.addTool(
+        name = "best-bets",
+        description = "Get best betting recommendations across all events in a sport based on value analysis",
+        inputSchema = Tool.Input(
+            buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("sport") {
+                        put("type", "string")
+                        put("description", "Sport key to analyze for best bets")
+                    }
+                    putJsonObject("min_confidence") {
+                        put("type", "number")
+                        put("description", "Minimum confidence level (0.0 to 1.0, default: 0.6)")
+                        put("default", 0.6)
+                    }
+                }
+                putJsonArray("required") {
+                    add("sport")
+                }
+            }
+        )
+    ) { request ->
+        val sport = request.arguments["sport"]?.jsonPrimitive?.content ?: ""
+        val minConfidence = request.arguments["min_confidence"]?.jsonPrimitive?.doubleOrNull ?: 0.6
+        
+        try {
+            val oddsData = oddsApiClient.getOdds(sport)
+            val allRecommendations = mutableListOf<String>()
+            
+            for (odds in oddsData.take(20)) { // Limit to avoid API quota issues
+                val event = BettingEvent(
+                    id = odds.id,
+                    sport = odds.sportKey,
+                    league = odds.sportTitle,
+                    homeTeam = odds.homeTeam,
+                    awayTeam = odds.awayTeam,
+                    startTime = odds.commenceTime,
+                    odds = mapOf(odds.id to odds)
+                )
+                
+                val analyses = analysisService.analyzeEvent(event)
+                for (analysis in analyses) {
+                    val va = analysis.valueAnalysis
+                    if (va.confidence >= minConfidence && (va.recommendation == "STRONG BUY" || va.recommendation == "BUY")) {
+                        allRecommendations.add(
+                            "🎯 ${event.homeTeam} vs ${event.awayTeam}\n" +
+                            "   Market: ${analysis.market}\n" +
+                            "   Best: ${analysis.bestOdds.outcome} @ ${analysis.bestOdds.odds} (${analysis.bestOdds.bookmaker})\n" +
+                            "   Recommendation: ${va.recommendation}\n" +
+                            "   Expected Value: ${String.format("%.2f%%", va.expectedValue * 100)}\n" +
+                            "   Kelly: ${String.format("%.2f%%", va.kelly * 100)}\n" +
+                            "   Confidence: ${String.format("%.1f%%", va.confidence * 100)}\n"
+                        )
+                    }
+                }
+            }
+            
+            CallToolResult(
+                content = listOf(
+                    TextContent(
+                        if (allRecommendations.isNotEmpty()) {
+                            "🏆 Best betting opportunities in $sport (confidence ≥ ${(minConfidence * 100).toInt()}%):\n\n${allRecommendations.take(10).joinToString("\n")}"
+                        } else {
+                            "No high-confidence betting opportunities found in $sport with the specified criteria."
+                        }
+                    )
+                )
+            )
+        } catch (e: Exception) {
+            CallToolResult(
+                content = listOf(TextContent("Error analyzing best bets: ${e.message}"))
+            )
+        }
+    }
+    
+    // Market analysis
+    server.addTool(
+        name = "market-analysis",
+        description = "Detailed market analysis for a specific event showing all available markets and bookmakers",
+        inputSchema = Tool.Input(
+            buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("sport") {
+                        put("type", "string")
+                        put("description", "Sport key")
+                    }
+                    putJsonObject("event_id") {
+                        put("type", "string")
+                        put("description", "Event ID to analyze in detail")
+                    }
+                }
+                putJsonArray("required") {
+                    add("sport")
+                    add("event_id")
+                }
+            }
+        )
+    ) { request ->
+        val sport = request.arguments["sport"]?.jsonPrimitive?.content ?: ""
+        val eventId = request.arguments["event_id"]?.jsonPrimitive?.content ?: ""
+        
+        try {
+            val odds = oddsApiClient.getEventOdds(sport, eventId)
+            
+            if (odds != null) {
+                val event = BettingEvent(
+                    id = odds.id,
+                    sport = odds.sportKey,
+                    league = odds.sportTitle,
+                    homeTeam = odds.homeTeam,
+                    awayTeam = odds.awayTeam,
+                    startTime = odds.commenceTime,
+                    odds = mapOf(odds.id to odds)
+                )
+                
+                val analysis = analysisService.analyzeEvent(event)
+                val marketDetails = StringBuilder()
+                
+                marketDetails.append("📊 Detailed Market Analysis\n")
+                marketDetails.append("Event: ${event.homeTeam} vs ${event.awayTeam}\n")
+                marketDetails.append("Start Time: ${event.startTime}\n\n")
+                
+                for (analysisResult in analysis) {
+                    marketDetails.append("🎯 ${analysisResult.market.uppercase()} MARKET\n")
+                    marketDetails.append("Best Bet: ${analysisResult.bestOdds.outcome} @ ${analysisResult.bestOdds.odds} (${analysisResult.bestOdds.bookmaker})\n")
+                    marketDetails.append("Recommendation: ${analysisResult.valueAnalysis.recommendation}\n")
+                    marketDetails.append("Expected Value: ${String.format("%.2f%%", analysisResult.valueAnalysis.expectedValue * 100)}\n")
+                    marketDetails.append("Kelly Stake: ${String.format("%.2f%%", analysisResult.valueAnalysis.kelly * 100)}\n")
+                    
+                    analysisResult.arbitrageOpportunity?.let { arb ->
+                        if (arb.guaranteed) {
+                            marketDetails.append("🚨 ARBITRAGE OPPORTUNITY: $${String.format("%.2f", arb.profit)} profit guaranteed!\n")
+                        }
+                    }
+                    marketDetails.append("\n")
+                }
+                
+                CallToolResult(
+                    content = listOf(TextContent(marketDetails.toString()))
+                )
+            } else {
+                CallToolResult(
+                    content = listOf(TextContent("Event not found: $eventId"))
+                )
+            }
+        } catch (e: Exception) {
+            CallToolResult(
+                content = listOf(TextContent("Error analyzing market: ${e.message}"))
+            )
+        }
+    }
+    
+    logger.info { "Starting MCP Beet Server..." }
+    
+    val transport = StdioServerTransport(
+        System.`in`.asInput(),
+        System.out.asSink().buffered()
+    )
+    
+    runBlocking {
+        try {
+            server.connect(transport)
+            val done = Job()
+            server.onClose {
+                done.complete()
+            }
+            done.join()
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to run MCP Beet Server" }
+        }
     }
 }
