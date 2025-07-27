@@ -1,0 +1,40 @@
+# Gradle
+.gradle/
+build/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+
+# Kotlin
+*.class
+*.jar
+*.war
+*.ear
+*.aar
+*.ap_
+*.dex
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# Android Studio
+local.properties
+.DS_Store
+
+# Environment variables
+.env
+
+# Logs
+*.log
+
+# Cache
+.cache/
+
+# API Keys (never commit these!)
+*api-key*
+*secret*
+*token*
