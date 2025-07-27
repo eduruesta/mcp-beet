@@ -14,7 +14,7 @@ A Model Context Protocol (MCP) server for analyzing sports betting odds and find
 
 1. **Set up API key:**
    ```bash
-   export ODDS_API_KEY="your_api_key_here"
+   export ODDS_API_KEY="5c88d13c45c678faa196d0cf16117ac2"
    ```
 
 2. **Build and run:**
