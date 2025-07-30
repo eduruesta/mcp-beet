@@ -423,6 +423,287 @@ fun `run betting mcp server`() {
         }
     }
     
+    // Live betting tracker
+    server.addTool(
+        name = "live-tracker",
+        description = "Track live games with real-time scores and odds changes",
+        inputSchema = Tool.Input(
+            buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("sport") {
+                        put("type", "string")
+                        put("description", "Sport key to track live games")
+                    }
+                }
+                putJsonArray("required") {
+                    add("sport")
+                }
+            }
+        )
+    ) { request ->
+        val sport = request.arguments["sport"]?.jsonPrimitive?.content ?: ""
+        
+        try {
+            val scores = oddsApiClient.getScores(sport, daysFrom = 1)
+            val liveGames = scores.filter { !it.completed }
+            
+            if (liveGames.isNotEmpty()) {
+                val liveInfo = StringBuilder()
+                liveInfo.append("🔴 LIVE GAMES in $sport:\n\n")
+                
+                for (game in liveGames.take(10)) {
+                    liveInfo.append("⚽ ${game.home_team} vs ${game.away_team}\n")
+                    val scoreText = game.scores?.joinToString(" - ") { "${it.name}: ${it.score}" } ?: "No score yet"
+                    liveInfo.append("   Score: $scoreText\n")
+                    liveInfo.append("   Started: ${game.commence_time}\n\n")
+                }
+                
+                CallToolResult(content = listOf(TextContent(liveInfo.toString())))
+            } else {
+                CallToolResult(
+                    content = listOf(TextContent("No live games currently in $sport"))
+                )
+            }
+        } catch (e: Exception) {
+            CallToolResult(
+                content = listOf(TextContent("Error tracking live games: ${e.message}"))
+            )
+        }
+    }
+    
+    // Bookmaker comparison
+    server.addTool(
+        name = "bookmaker-comparison",
+        description = "Compare all bookmakers for a specific market across multiple events",
+        inputSchema = Tool.Input(
+            buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("sport") {
+                        put("type", "string")
+                        put("description", "Sport key to analyze")
+                    }
+                    putJsonObject("market") {
+                        put("type", "string") 
+                        put("description", "Market type: h2h, spreads, or totals")
+                        put("default", "h2h")
+                    }
+                }
+                putJsonArray("required") {
+                    add("sport")
+                }
+            }
+        )
+    ) { request ->
+        val sport = request.arguments["sport"]?.jsonPrimitive?.content ?: ""
+        val market = request.arguments["market"]?.jsonPrimitive?.content ?: "h2h"
+        
+        try {
+            val oddsData = oddsApiClient.getOdds(sport, markets = market)
+            val bookmakersStats = mutableMapOf<String, MutableList<Double>>()
+            
+            // Collect all odds from all bookmakers
+            for (odds in oddsData.take(20)) {
+                for (bookmaker in odds.bookmakers) {
+                    val targetMarket = bookmaker.markets.find { it.key == market }
+                    targetMarket?.let { mkt ->
+                        for (outcome in mkt.outcomes) {
+                            val key = "${bookmaker.title} - ${outcome.name}"
+                            bookmakersStats.getOrPut(key) { mutableListOf() }.add(outcome.price)
+                        }
+                    }
+                }
+            }
+            
+            val comparison = StringBuilder()
+            comparison.append("📊 BOOKMAKER COMPARISON - $market market in $sport\n\n")
+            
+            val avgByBookmaker = bookmakersStats.map { (key, prices) ->
+                val avg = prices.average()
+                val count = prices.size
+                Triple(key, avg, count)
+            }.sortedByDescending { it.second }
+            
+            for ((key, avg, count) in avgByBookmaker.take(15)) {
+                comparison.append("• $key: ${String.format("%.2f", avg)} avg (${count} events)\n")
+            }
+            
+            CallToolResult(content = listOf(TextContent(comparison.toString())))
+        } catch (e: Exception) {
+            CallToolResult(
+                content = listOf(TextContent("Error comparing bookmakers: ${e.message}"))
+            )
+        }
+    }
+    
+    // Value hunting across multiple sports
+    server.addTool(
+        name = "value-hunter",
+        description = "Hunt for value bets across multiple sports with advanced filtering. Example: sports can be 'basketball_nba,soccer_epl' or [\"basketball_nba\", \"soccer_epl\"]",
+        inputSchema = Tool.Input(
+            buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("sports") {
+                        put("type", "string")
+                        put("description", "Comma-separated sports or JSON array: 'basketball_nba,soccer_epl' or [\"basketball_nba\", \"soccer_epl\"]")
+                    }
+                    putJsonObject("min_expected_value") {
+                        put("type", "number")
+                        put("description", "Minimum expected value (0.06 = 6%)")
+                        put("default", 0.05)
+                    }
+                    putJsonObject("min_kelly") {
+                        put("type", "number")
+                        put("description", "Minimum Kelly criterion (0.02 = 2%)")
+                        put("default", 0.02)
+                    }
+                }
+                putJsonArray("required") {
+                    add("sports")
+                }
+            }
+        )
+    ) { request ->
+        val minEV = request.arguments["min_expected_value"]?.jsonPrimitive?.doubleOrNull ?: 0.05
+        val minKelly = request.arguments["min_kelly"]?.jsonPrimitive?.doubleOrNull ?: 0.02
+        
+        // Handle multiple formats for sports input
+        val sportsToAnalyze = try {
+            // Try to parse as JSON array first
+            request.arguments["sports"]?.jsonArray?.map { it.jsonPrimitive.content }
+        } catch (_: Exception) {
+            // If that fails, try to parse as string
+            val sportsString = request.arguments["sports"]?.jsonPrimitive?.content
+            if (sportsString != null) {
+                try {
+                    // Try parsing as JSON array string
+                    val jsonElement = Json.parseToJsonElement(sportsString)
+                    jsonElement.jsonArray.map { it.jsonPrimitive.content }
+                } catch (_: Exception) {
+                    // Fall back to comma-separated format
+                    sportsString.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                }
+            } else null
+        }
+        
+        if (sportsToAnalyze == null) {
+            return@addTool CallToolResult(
+                content = listOf(TextContent("Error: Please provide sports as an array, e.g., [\"basketball_nba\", \"soccer_epl\"]"))
+            )
+        }
+        
+        try {
+            val allValueBets = mutableListOf<String>()
+            
+            sportsToAnalyze.forEach { sport ->
+                val oddsData = oddsApiClient.getOdds(sport)
+                
+                for (odds in oddsData.take(10)) { // Limit per sport to manage API quota
+                    val event = BettingEvent(
+                        id = odds.id,
+                        sport = odds.sportKey,
+                        league = odds.sportTitle,
+                        homeTeam = odds.homeTeam,
+                        awayTeam = odds.awayTeam,
+                        startTime = odds.commenceTime,
+                        odds = mapOf(odds.id to odds)
+                    )
+                    
+                    val analyses = analysisService.analyzeEvent(event)
+                    for (analysis in analyses) {
+                        val va = analysis.valueAnalysis
+                        if (va.expectedValue >= minEV && va.kelly >= minKelly) {
+                            allValueBets.add(
+                                "💎 ${event.homeTeam} vs ${event.awayTeam} (${event.league})\n" +
+                                "   Market: ${analysis.market} | Bet: ${analysis.bestOdds.outcome}\n" +
+                                "   Odds: ${analysis.bestOdds.odds} @ ${analysis.bestOdds.bookmaker}\n" +
+                                "   Expected Value: ${String.format("%.1f%%", va.expectedValue * 100)}\n" +
+                                "   Kelly: ${String.format("%.1f%%", va.kelly * 100)}\n" +
+                                "   Confidence: ${String.format("%.0f%%", va.confidence * 100)}\n"
+                            )
+                        }
+                    }
+                }
+            }
+            
+            CallToolResult(
+                content = listOf(
+                    TextContent(
+                        if (allValueBets.isNotEmpty()) {
+                            "🏆 VALUE BETS ACROSS SPORTS (EV ≥ ${(minEV*100).toInt()}%, Kelly ≥ ${(minKelly*100).toInt()}%):\n\n${
+                                allValueBets.take(15).joinToString("\n")
+                            }"
+                        } else {
+                            "No value bets found meeting the specified criteria across the selected sports."
+                        }
+                    )
+                )
+            )
+        } catch (e: Exception) {
+            CallToolResult(
+                content = listOf(TextContent("Error hunting for value: ${e.message}"))
+            )
+        }
+    }
+    
+    // Quick event lookup
+    server.addTool(
+        name = "find-event",
+        description = "Find events by team names or keywords",
+        inputSchema = Tool.Input(
+            buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("sport") {
+                        put("type", "string")
+                        put("description", "Sport key to search in")
+                    }
+                    putJsonObject("query") {
+                        put("type", "string")
+                        put("description", "Team name or keyword to search for")
+                    }
+                }
+                putJsonArray("required") {
+                    add("sport")
+                    add("query")
+                }
+            }
+        )
+    ) { request ->
+        val sport = request.arguments["sport"]?.jsonPrimitive?.content ?: ""
+        val query = request.arguments["query"]?.jsonPrimitive?.content?.lowercase() ?: ""
+        
+        try {
+            val events = oddsApiClient.getEvents(sport)
+            val matchingEvents = events.filter { 
+                it.home_team.lowercase().contains(query) || 
+                it.away_team.lowercase().contains(query)
+            }
+            
+            CallToolResult(
+                content = listOf(
+                    TextContent(
+                        if (matchingEvents.isNotEmpty()) {
+                            "🔍 Found ${matchingEvents.size} events matching '$query' in $sport:\n\n${
+                                matchingEvents.take(10).joinToString("\n") { 
+                                    "• ${it.home_team} vs ${it.away_team} - ${it.commence_time}\n  ID: ${it.id}"
+                                }
+                            }"
+                        } else {
+                            "No events found matching '$query' in $sport"
+                        }
+                    )
+                )
+            )
+        } catch (e: Exception) {
+            CallToolResult(
+                content = listOf(TextContent("Error finding events: ${e.message}"))
+            )
+        }
+    }
+    
     logger.info { "Starting MCP Beet Server..." }
     
     val transport = StdioServerTransport(

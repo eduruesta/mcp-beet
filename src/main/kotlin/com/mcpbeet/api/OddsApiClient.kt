@@ -70,11 +70,16 @@ class OddsApiClient {
     ): OddsData? {
         logger.info { "Fetching odds for event: $eventId" }
         return try {
-            httpClient.get("$baseUrl/sports/$sport/odds") {
-                parameter("api_key", apiKey)
-                parameter("eventIds", eventId)
-                parameter("markets", markets)
-            }.body<List<OddsData>>().firstOrNull()
+            // First try to find the event in all odds
+            val allOdds = getOdds(sport, markets = markets)
+            val eventOdds = allOdds.find { it.id == eventId }
+            
+            if (eventOdds != null) {
+                eventOdds
+            } else {
+                logger.warn { "Event $eventId not found in current odds" }
+                null
+            }
         } catch (e: Exception) {
             logger.error(e) { "Failed to fetch event odds for $eventId" }
             null
